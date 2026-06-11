@@ -1,0 +1,244 @@
+================================================================
+CODE REVIEW — tests/test03.py
+================================================================
+
+----------------------------------------------------------------
+SECTION 1 — BUGS / CORRECTNESS ISSUES
+----------------------------------------------------------------
+
+BUG-1  [lines 23-29]  ID collision after deletion
+       IDs are assigned as `len(todos) + 1`.  After any item is
+       deleted, the next addition reuses a previously-issued ID.
+       Example: add 3 items (IDs 1,2,3), delete ID 2, add a new
+       item → new item also gets ID 2.  Searching by ID will then
+       match the wrong item.
+
+       Fix: track the next available ID independently.
+         max_id = max((t["id"] for t in todos), default=0) + 1
+       or persist a counter in the JSON file.
+
+BUG-2  [lines 22-29]  add_todo mutates caller's list but returns None
+       `add_todo` appends directly to the list that was passed in
+       and returns nothing.  The caller in `main()` (line 87) does
+       not capture a return value, so the mutation is relied upon
+       implicitly.  This is not a crash bug, but it creates a
+       hidden coupling: callers that pass a copy will silently lose
+       the new item.
+
+       Fix: either document explicitly that the list is mutated in
+       place, or return the updated list and assign it back:
+         todos = add_todo(todos, text)
+
+BUG-3  [lines 8-11]  load_todos has no error handling for corrupt JSON
+       If `todos.json` exists but contains malformed JSON (e.g. a
+       partial write crash), `json.load(f)` raises
+       `json.JSONDecodeError`, which is unhandled and crashes the
+       program with a traceback.
+
+       Fix:
+         try:
+             todos = json.load(f)
+         except json.JSONDecodeError:
+             print("Warning: todos file is corrupted. Starting fresh.")
+             return []
+
+BUG-4  [lines 16-18]  save_todos has no error handling for I/O failures
+       A failed write (disk full, permissions) raises an unhandled
+       `OSError` and could leave `todos.json` empty or truncated,
+       destroying existing data.
+
+       Fix: write to a temp file first, then atomically replace:
+         import tempfile, shutil
+         with tempfile.NamedTemporaryFile("w", delete=False,
+                 suffix=".tmp", dir=".") as tmp:
+             json.dump(todos, tmp)
+             tmp_name = tmp.name
+         shutil.move(tmp_name, TODO_FILE)
+
+BUG-5  [lines 34-39]  complete_todo searches by ID but IDs are not unique
+       Due to BUG-1, duplicate IDs are possible.  The loop stops at
+       the first match (`return`), so later duplicates are silently
+       ignored.  This affects `delete_todo` (lines 43-50) too.
+
+BUG-6  [line 17]  save_todos does not validate input type
+       If `todos` is accidentally `None` or not a list,
+       `json.dump` will serialise it without complaint, silently
+       corrupting the file.  A simple guard would help:
+         assert isinstance(todos, list), "todos must be a list"
+
+BUG-7  [lines 4, entire file]  Hard-coded global path for TODO_FILE
+       `TODO_FILE = "todos.json"` resolves relative to the current
+       working directory, not the script's directory.  Running the
+       script from a different directory creates (or reads) a
+       different file than expected.
+
+       Fix:
+         TODO_FILE = os.path.join(os.path.dirname(__file__), "todos.json")
+
+BUG-8  [lines 55-62]  list_todos uses `len(todos) == 0` instead of falsy check
+       Not a crash, but `if not todos:` is the idiomatic and
+       slightly safer form (also works if `todos` is `None`).
+
+----------------------------------------------------------------
+SECTION 2 — STYLE AND READABILITY ISSUES
+----------------------------------------------------------------
+
+STYLE-1  No module-level or function-level docstrings
+         None of the functions have docstrings explaining their
+         contract, parameters, or return values.  PEP 257 recommends
+         docstrings for all public functions.
+
+STYLE-2  [line 4]  Magic constant not separated from imports by a blank line
+         PEP 8 recommends two blank lines between top-level
+         definitions.  The constant `TODO_FILE` should be separated
+         from the import block by one blank line.
+
+STYLE-3  [lines 22-30]  add_todo, complete_todo, delete_todo mix I/O concerns
+         Business logic (mutating the list, persisting) and
+         presentation logic (`print`) are interleaved in the same
+         functions.  This makes unit-testing impossible without
+         capturing stdout.  Separate concerns by returning results
+         and letting `main()` handle printing.
+
+STYLE-4  [lines 57-62]  list_todos prints directly; no return value
+         Same mixing-of-concerns issue as STYLE-3.  Return the
+         formatted string or a list of strings.
+
+STYLE-5  [lines 65-69]  show_menu() could use a multi-line string
+         A single `print("""...""")` is more readable than five
+         separate print calls.
+
+STYLE-6  [line 57]  `len(todos) == 0` vs `not todos`
+         Using `not todos` is the Pythonic idiom for empty-sequence
+         checks (also covered in BUG-8).
+
+STYLE-7  Inconsistent error messages
+         "Todo not found" (lines 40, 51) is not very informative.
+         It should tell the user which ID was not found:
+           print(f"Todo with ID {todo_id} not found.")
+
+STYLE-8  No type annotations
+         Adding PEP 484 type hints improves IDE support and
+         self-documents the API:
+           def add_todo(todos: list[dict], text: str) -> None:
+
+STYLE-9  [lines 76-107]  main() is long and repetitive
+         The "complete" and "delete" branches (lines 93-103) share
+         an identical structure (list → input → try/except). This
+         can be refactored into a helper or a dispatch table.
+
+----------------------------------------------------------------
+SECTION 3 — SUGGESTED IMPROVEMENTS
+----------------------------------------------------------------
+
+IMPROVEMENT-1  Use a UUID or monotonically-increasing counter for IDs
+    Rather than basing the ID on `len(todos)`, store the last used
+    ID in the JSON so it survives deletions:
+
+        def load_todos():
+            ...
+            data = json.load(f)
+            # Expect {"next_id": int, "items": [...]}
+            return data.get("next_id", 1), data.get("items", [])
+
+        def save_todos(todos, next_id):
+            with open(TODO_FILE, "w") as f:
+                json.dump({"next_id": next_id, "items": todos}, f, indent=2)
+
+        def add_todo(todos, text, next_id):
+            todo = {"id": next_id, "text": text, "done": False}
+            todos.append(todo)
+            save_todos(todos, next_id + 1)
+            return next_id + 1   # caller updates its counter
+
+IMPROVEMENT-2  Atomic writes to prevent data loss (addresses BUG-4)
+
+        import tempfile, shutil
+
+        def save_todos(todos):
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=".", suffix=".tmp")
+            try:
+                with os.fdopen(tmp_fd, "w") as f:
+                    json.dump(todos, f, indent=2)
+                shutil.move(tmp_path, TODO_FILE)
+            except Exception:
+                os.unlink(tmp_path)
+                raise
+
+IMPROVEMENT-3  Pretty-print JSON for human readability
+        Change `json.dump(todos, f)` to `json.dump(todos, f, indent=2)`.
+        This makes the file human-readable and easier to diff in
+        version control.
+
+IMPROVEMENT-4  Separate business logic from I/O for testability
+        Move all `print()` calls out of data-manipulation functions
+        so they can be unit-tested without mocking stdout:
+
+        # In add_todo — no print:
+        def add_todo(todos, text):
+            todo = {"id": len(todos) + 1, "text": text, "done": False}
+            todos.append(todo)
+            save_todos(todos)
+            return todo   # caller decides how to present it
+
+        # In main:
+        todo = add_todo(todos, text)
+        print(f"Added: {todo['text']}")
+
+IMPROVEMENT-5  Add a proper entry-point guard and argparse (optional)
+        The script only runs interactively.  Adding CLI argument
+        support (e.g. `python test03.py add "Buy milk"`) would make
+        it scriptable and easier to test automatically.
+
+IMPROVEMENT-6  Add unit tests (the file is named test03.py but has none)
+        The filename suggests it should be a test module.  Consider
+        adding pytest-based tests:
+
+        def test_add_todo_increases_list():
+            todos = []
+            add_todo(todos, "Write tests")
+            assert len(todos) == 1
+            assert todos[0]["text"] == "Write tests"
+            assert todos[0]["done"] is False
+
+        def test_complete_todo():
+            todos = [{"id": 1, "text": "Task", "done": False}]
+            complete_todo(todos, 1)
+            assert todos[0]["done"] is True
+
+        def test_delete_todo():
+            todos = [{"id": 1, "text": "Task", "done": False}]
+            delete_todo(todos, 1)
+            assert todos == []
+
+IMPROVEMENT-7  Use a dataclass or namedtuple instead of raw dicts
+        A typed structure prevents typo-based key errors:
+
+        from dataclasses import dataclass, field, asdict
+
+        @dataclass
+        class Todo:
+            id: int
+            text: str
+            done: bool = False
+
+----------------------------------------------------------------
+OVERALL ASSESSMENT
+----------------------------------------------------------------
+
+`test03.py` is a compact, readable CLI to-do application that
+demonstrates a clear and logical structure.  The code is easy to
+follow for a beginner, the menu loop is straightforward, and the
+use of JSON for persistence is appropriate.  However, the file has
+several correctness issues that could cause real data loss or
+incorrect behaviour in production: most critically, IDs are
+non-unique after deletions, the persistence layer has no protection
+against corrupt or partially-written files, and the hard-coded
+relative path for the data file can silently point to the wrong
+location.  Additionally, the mixing of I/O side-effects (printing)
+inside business-logic functions makes the code untestable as-is —
+ironic given the `test` prefix in the filename.  Addressing the ID
+strategy, adopting atomic writes, separating presentation from
+logic, and adding even a small pytest suite would significantly
+raise the reliability and maintainability of this module.
+================================================================

@@ -1,0 +1,5 @@
+{
+  "name": "review",
+  "description": "Review the code in a file or diff for bugs, style issues, and improvements.",
+  "prompt_template": "Perform a structured code review of: {{args}}\n\nSteps:\n1. If the target is a directory, use search/shell_execute to list the source files; if it is a file, use file_read to read it. If the target looks like a git repo and you want recent changes, run 'git diff' via shell_execute.\n2. Read the relevant code carefully.\n3. Produce a structured review with three sections:\n   - Bugs / correctness issues (with file and line references)\n   - Style and readability issues\n   - Suggested improvements (concrete, with example code where helpful)\n4. End with a one-paragraph overall assessment. Do NOT modify any files. Instead, in the same directory, create a file called 'suggestions.txt' where you paste your recommendations."
+}

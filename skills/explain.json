@@ -1,0 +1,5 @@
+{
+  "name": "explain",
+  "description": "Read a file and produce a plain-English explanation of what it does.",
+  "prompt_template": "Explain the code in the following file: {{args}}\n\nSteps:\n1. Use file_read to read the contents of the file.\n2. Produce a clear, plain-English explanation covering:\n   - What the file does overall (1-2 sentences)\n   - Each function or class: what it does, its inputs, and its outputs\n   - Any important logic, algorithms, or design decisions worth noting\n   - Any potential issues or gotchas you notice\n3. Write the explanation for an audience that understands programming but may not be familiar with this specific codebase.\n4. Do not modify the file."
+}
